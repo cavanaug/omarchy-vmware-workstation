@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "id": "cavanaug.vmware",
+  "name": "VMware Workstation",
+  "version": "1.0.0",
+  "author": "cavanaug",
+  "license": "MIT",
+  "description": "Workstation library and power/guest controls in the Omarchy bar.",
+  "kinds": ["bar-widget"],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "VMware Workstation",
+    "description": "List VMs from the Workstation inventory and run power or guest actions.",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "icon_style": "branded",
+      "refreshIntervalSec": 30
+    },
+    "schema": [
+      {
+        "key": "icon_style",
+        "type": "enum",
+        "label": "Bar icon",
+        "options": ["branded", "themed"],
+        "defaultValue": "branded"
+      },
+      {
+        "key": "refreshIntervalSec",
+        "type": "integer",
+        "label": "Refresh interval (seconds)",
+        "min": 5,
+        "max": 3600,
+        "step": 5,
+        "defaultValue": 30
+      }
+    ]
+  }
+}
