@@ -31,7 +31,7 @@ Item {
   property string _pendingVmx: ""
 
   function refresh() {
-    if (actionProcess.running) return
+    if (busy) return
     if (!installed) {
       if (!whichProcess.running) {
         whichProcess.command = ["which", "vmrun"]
@@ -39,7 +39,7 @@ Item {
       }
       return
     }
-    if (listProcess.running) return
+    if (_inventory.length === 0) return
     _listOut = ""
     _listErr = ""
     listProcess.command = ["vmrun", "-T", "ws", "list"]
@@ -87,7 +87,7 @@ Item {
   }
 
   function runSlot(slot, vmx) {
-    if (!installed || actionProcess.running || !vmx) return
+    if (!installed || busy || !vmx) return
     var cmd = Model.commandForSlot(slot, vmx)
     if (!cmd.length) return
     _actionErr = ""
@@ -99,6 +99,10 @@ Item {
 
   function loadInventory(text) {
     _inventory = Model.parseInventory(text)
+    if (_inventory.length === 0) {
+      vms = []
+      if (installed) lastError = ""
+    }
   }
 
   FileView {
