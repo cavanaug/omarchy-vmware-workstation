@@ -32,6 +32,7 @@ function parseRunningList(text) {
 }
 
 function normalizePath(p) {
+  // ponytail: lexical only—no symlink/.. resolution, so divergent inventory/vmrun paths can look off; upgrade the Service probe to realpath both.
   return String(p || "").replace(/\\/g, "/").replace(/\/+/g, "/").replace(/\/$/, "")
 }
 

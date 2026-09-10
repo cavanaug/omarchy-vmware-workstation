@@ -8,5 +8,6 @@ Installed as a symlink:
 ~/.config/omarchy/plugins/cavanaug.vmware → ~/wip_other/src_cavanaug/omarchy-vmware-workstation
 ```
 
-Validate with `omarchy plugin validate ~/.config/omarchy/plugins/cavanaug.vmware`.
+Validate with `omarchy plugin validate ~/wip_other/src_cavanaug/omarchy-vmware-workstation`.
+The CLI rejects the symlink install path.
 Self-check: `node check.js`.

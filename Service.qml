@@ -29,25 +29,25 @@ Item {
   property string _actionErr: ""
   property int _pendingSlot: 0
   property string _pendingVmx: ""
-  property bool _refreshQueued: false
+  property double _whichStartedMs: 0
+  property double _listStartedMs: 0
+  property double _vmssStartedMs: 0
+  property double _actionStartedMs: 0
 
   function refresh() {
-    if (busy) {
-      _refreshQueued = true
-      return
-    }
-    _refreshQueued = false
     if (!installed) {
-      if (!whichProcess.running) {
-        whichProcess.command = ["which", "vmrun"]
-        whichProcess.running = true
-      }
+      if (whichProcess.running) return
+      whichProcess.command = ["which", "vmrun"]
+      _whichStartedMs = Date.now()
+      whichProcess.running = true
       return
     }
     if (_inventory.length === 0) return
+    if (listProcess.running) return
     _listOut = ""
     _listErr = ""
     listProcess.command = ["vmrun", "-T", "ws", "list"]
+    _listStartedMs = Date.now()
     listProcess.running = true
   }
 
@@ -88,17 +88,19 @@ Item {
     if (vmssProcess.running) return
     _vmssOut = ""
     vmssProcess.command = ["bash", "-c", Model.vmssProbeScript(paths) + "\nfor p in " + paths.map(function (p) { return Model.shellQuote(p) }).join(" ") + "; do [ -f \"$p\" ] || printf 'MISSING:%s\\n' \"$p\"; done"]
+    _vmssStartedMs = Date.now()
     vmssProcess.running = true
   }
 
   function runSlot(slot, vmx) {
-    if (!installed || busy || !vmx) return
+    if (!installed || actionProcess.running || !vmx) return
     var cmd = Model.commandForSlot(slot, vmx)
     if (!cmd.length) return
     _actionErr = ""
     _pendingSlot = slot
     _pendingVmx = vmx
     actionProcess.command = cmd
+    _actionStartedMs = Date.now()
     actionProcess.running = true
   }
 
@@ -134,6 +136,30 @@ Item {
     onTriggered: root.refresh()
   }
 
+  Timer {
+    // Each poll is guarded only by its own process, so reap anything that never
+    // exits before it can leave that part of the panel permanently stale.
+    id: pollWatchdog
+    readonly property int timeoutMs: 15000
+    interval: 1000
+    repeat: true
+    running: root.busy
+    onTriggered: {
+      var now = Date.now()
+      if (whichProcess.running && now - root._whichStartedMs >= timeoutMs) whichProcess.running = false
+      if (listProcess.running && now - root._listStartedMs >= timeoutMs) listProcess.running = false
+      if (vmssProcess.running && now - root._vmssStartedMs >= timeoutMs) vmssProcess.running = false
+      if (actionProcess.running && now - root._actionStartedMs >= timeoutMs) actionProcess.running = false
+    }
+  }
+
+  Timer {
+    id: delayedRefresh
+    interval: 600
+    repeat: false
+    onTriggered: root.refresh()
+  }
+
   Process {
     id: whichProcess
     running: false
@@ -146,7 +172,7 @@ Item {
         root.vms = []
         return
       }
-      root.refresh()
+      delayedRefresh.restart()
     }
   }
 
@@ -164,7 +190,6 @@ Item {
     onExited: function (code) {
       if (code !== 0) {
         root.lastError = String(root._listErr || root._listOut || "vmrun list failed").replace(/^\s+|\s+$/g, "")
-        if (root._refreshQueued) root.refresh()
         return
       }
       root.finishPoll(root._listOut)
@@ -189,7 +214,6 @@ Item {
         else hits.push(line)
       }
       root.applyMissingVmx(hits, missing)
-      if (root._refreshQueued) root.refresh()
     }
   }
 
@@ -207,7 +231,7 @@ Item {
       } else {
         root.lastError = ""
       }
-      root.refresh()
+      delayedRefresh.restart()
     }
   }
 }

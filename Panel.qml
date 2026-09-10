@@ -159,14 +159,17 @@ Panel {
           foreground: root.foreground
           fontFamily: root.fontFamily
           iconComponent: Component {
-            Image {
+            Item {
               width: Style.font.display
               height: Style.font.display
-              source: root.brandedIcon
-              sourceSize.width: 48
-              sourceSize.height: 48
-              fillMode: Image.PreserveAspectFit
-              smooth: true
+              Image {
+                anchors.fill: parent
+                source: root.brandedIcon
+                sourceSize.width: 48
+                sourceSize.height: 48
+                fillMode: Image.PreserveAspectFit
+                smooth: true
+              }
             }
           }
           trailingControl: Component {

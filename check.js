@@ -1,4 +1,5 @@
 var M = require("./Model.js")
+var fs = require("fs")
 var fails = 0
 
 function eq(name, actual, expected) {
@@ -93,6 +94,16 @@ eq("shellQuote", M.shellQuote("a'b"), "'a'\\''b'")
 eq("runningCount",
   M.runningCount([{ state: "running" }, { state: "off" }, { state: "running" }]),
   2)
+
+var service = fs.readFileSync("./Service.qml", "utf8")
+eq("refresh is not aggregate busy gated", service.indexOf("if (busy)") === -1, true)
+eq("actions are independently gated", service.indexOf("if (!installed || actionProcess.running || !vmx) return") !== -1, true)
+eq("exits defer refresh", (service.match(/delayedRefresh\.restart\(\)/g) || []).length, 2)
+eq("poll watchdog covers every process",
+  ["whichProcess", "listProcess", "vmssProcess", "actionProcess"].every(function (name) {
+    return new RegExp("if \\(" + name + "\\.running[^\\n]+\\) " + name + "\\.running = false").test(service)
+  }),
+  true)
 
 if (fails) {
   console.error(fails + " failed")
