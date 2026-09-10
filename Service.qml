@@ -26,9 +26,11 @@ Item {
   property string _listOut: ""
   property string _listErr: ""
   property string _vmssOut: ""
+  property string _actionOut: ""
   property string _actionErr: ""
-  property int _pendingSlot: 0
-  property string _pendingVmx: ""
+  property int pendingSlot: 0
+  property string pendingVmx: ""
+  property double _pendingHoldUntilMs: 0
   property double _whichStartedMs: 0
   property double _listStartedMs: 0
   property double _vmssStartedMs: 0
@@ -70,15 +72,39 @@ Item {
         vmx: ent.vmx,
         name: ent.name,
         state: state,
-        enabled: Model.slotsEnabled(state)
+        slotsMask: Model.slotsMask(state)
       })
     }
     vms = rows
+    settlePending()
+  }
+
+  function observedState(vmx) {
+    var rows = vms
+    for (var i = 0; i < rows.length; i++) {
+      if (Model.sameVmx(rows[i].vmx, vmx)) return rows[i].state
+    }
+    return ""
+  }
+
+  function settlePending() {
+    if (!pendingSlot) return
+    if (!Model.shouldHoldPending(pendingSlot, observedState(pendingVmx))) {
+      pendingSlot = 0
+      pendingVmx = ""
+      return
+    }
+    if (actionProcess.running) return
+    if (_pendingHoldUntilMs && Date.now() >= _pendingHoldUntilMs) {
+      pendingSlot = 0
+      pendingVmx = ""
+      return
+    }
+    delayedRefresh.restart()
   }
 
   function finishPoll(listText) {
     _running = Model.parseRunningList(listText)
-    lastError = ""
     var paths = []
     for (var i = 0; i < _inventory.length; i++) paths.push(_inventory[i].vmx)
     if (paths.length === 0) {
@@ -93,15 +119,26 @@ Item {
   }
 
   function runSlot(slot, vmx) {
-    if (!installed || actionProcess.running || !vmx) return
-    var cmd = Model.commandForSlot(slot, vmx)
-    if (!cmd.length) return
+    if (!installed || actionProcess.running || !vmx) {
+      if (!vmx) lastError = "missing vmx"
+      else if (!installed) lastError = "vmrun is not installed or not on PATH."
+      else lastError = "vmrun is busy"
+      return
+    }
+    var cmd = Model.commandForSlot(Number(slot), String(vmx))
+    if (!cmd.length) {
+      lastError = "unknown action"
+      return
+    }
+    var argv = ["bash", "-c", Model.vmrunWithKeyringScript(cmd)]
+    _actionOut = ""
     _actionErr = ""
-    _pendingSlot = slot
-    _pendingVmx = vmx
-    actionProcess.command = cmd
+    pendingSlot = Number(slot)
+    pendingVmx = String(vmx)
+    _pendingHoldUntilMs = 0
+    lastError = ""
     _actionStartedMs = Date.now()
-    actionProcess.running = true
+    actionProcess.exec(argv)
   }
 
   function loadInventory(text) {
@@ -141,6 +178,7 @@ Item {
     // exits before it can leave that part of the panel permanently stale.
     id: pollWatchdog
     readonly property int timeoutMs: 15000
+    readonly property int actionTimeoutMs: 180000
     interval: 1000
     repeat: true
     running: root.busy
@@ -149,7 +187,7 @@ Item {
       if (whichProcess.running && now - root._whichStartedMs >= timeoutMs) whichProcess.running = false
       if (listProcess.running && now - root._listStartedMs >= timeoutMs) listProcess.running = false
       if (vmssProcess.running && now - root._vmssStartedMs >= timeoutMs) vmssProcess.running = false
-      if (actionProcess.running && now - root._actionStartedMs >= timeoutMs) actionProcess.running = false
+      if (actionProcess.running && now - root._actionStartedMs >= actionTimeoutMs) actionProcess.running = false
     }
   }
 
@@ -220,16 +258,27 @@ Item {
   Process {
     id: actionProcess
     running: false
-    stdout: StdioCollector { waitForEnd: true }
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root._actionOut = text
+    }
     stderr: StdioCollector {
       waitForEnd: true
       onStreamFinished: root._actionErr = text
     }
     onExited: function (code) {
       if (code !== 0) {
-        root.lastError = String(root._actionErr || "vmrun failed").replace(/^\s+|\s+$/g, "")
+        root.pendingSlot = 0
+        root.pendingVmx = ""
+        root.lastError = Model.formatActionError(root._actionOut, root._actionErr, code)
       } else {
         root.lastError = ""
+        if (Model.shouldHoldPending(root.pendingSlot, root.observedState(root.pendingVmx))) {
+          root._pendingHoldUntilMs = Date.now() + 15000
+        } else {
+          root.pendingSlot = 0
+          root.pendingVmx = ""
+        }
       }
       delayedRefresh.restart()
     }

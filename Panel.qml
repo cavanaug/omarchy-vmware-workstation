@@ -22,27 +22,39 @@ Panel {
   readonly property int rowHeight: Style.space(44)
   readonly property int visibleRows: Math.min(vmware.vms.length, 5)
   readonly property bool scrollable: vmware.vms.length > 5
+  readonly property int nameColWidth: Math.round(nameMetrics.averageCharacterWidth * 22)
+  readonly property int iconBtnSize: Style.space(22)
+  readonly property int iconGap: Style.space(4)
+  readonly property int iconGroupWidth: iconBtnSize * 3 + iconGap * 2
+  readonly property int groupGap: Style.space(36)
+  readonly property int hyperColWidth: Math.max(iconGroupWidth, Math.round(headerMetrics.averageCharacterWidth * 10))
+  readonly property int guestColWidth: Math.max(iconGroupWidth, Math.round(headerMetrics.averageCharacterWidth * 7))
+  readonly property int listRowWidth: nameColWidth + Style.space(10) + hyperColWidth + groupGap + guestColWidth
+
+  FontMetrics {
+    id: nameMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.body
+  }
+
+  FontMetrics {
+    id: headerMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.bodySmall
+  }
 
   function openWorkstation() {
-    Quickshell.execDetached(Model.openWorkstationCommand(gtkWhich.installed, hidpiWhich.installed))
+    Quickshell.execDetached(Model.openWorkstationCommand())
+    root.close()
   }
 
   function slotGlyph(slot) {
-    if (slot === 1) return "󰐥"
-    if (slot === 2) return "󰒲"
-    if (slot === 3) return "󰜉"
-    if (slot === 4) return "󰐊"
-    if (slot === 5) return "󰓛"
-    return "󰏤"
-  }
-
-  function slotTip(slot) {
-    if (slot === 1) return "Power On / Resume"
-    if (slot === 2) return "Power Off"
-    if (slot === 3) return "Suspend"
-    if (slot === 4) return "Shutdown (Guest)"
-    if (slot === 5) return "Suspend (Guest)"
-    return "Restart (Guest)"
+    if (slot === 1) return "󰓛"
+    if (slot === 2) return "󰏤"
+    if (slot === 3) return "󰐊"
+    if (slot === 4) return ""
+    if (slot === 5) return "󰒲"
+    return ""
   }
 
   function bulletColor(state) {
@@ -56,22 +68,6 @@ Panel {
     settings: root.settings
   }
 
-  Process {
-    id: gtkWhich
-    running: true
-    command: ["which", "gtk-launch"]
-    property bool installed: false
-    onExited: function (code) { gtkWhich.installed = code === 0 }
-  }
-
-  Process {
-    id: hidpiWhich
-    running: true
-    command: ["test", "-f", (Quickshell.env("HOME") || "") + "/.local/bin/vmware-hidpi"]
-    property bool installed: false
-    onExited: function (code) { hidpiWhich.installed = code === 0 }
-  }
-
   IpcHandler {
     target: root.ipcTarget
     function open(): void { root.open() }
@@ -80,6 +76,15 @@ Panel {
     function hide(): void { root.close() }
     function toggle(): void { root.toggle() }
     function refresh(): string { vmware.refresh(); return "ok" }
+    function status(): string {
+      var lines = []
+      for (var i = 0; i < vmware.vms.length; i++) {
+        var v = vmware.vms[i]
+        lines.push(String(v.name) + " " + String(v.state) + " mask=" + String(v.slotsMask))
+      }
+      if (vmware.lastError) lines.push(vmware.lastError)
+      return lines.join("\n") || "none"
+    }
   }
 
   implicitWidth: button.implicitWidth
@@ -130,7 +135,10 @@ Panel {
     owner: root
     bar: root.bar
     open: root.opened
-    contentWidth: panel.fittedContentWidth(Style.space(420))
+    contentWidth: panel.fittedContentWidth(
+      root.listRowWidth + panel.padding * 2
+        + Border.left(panel.borderSpec) + Border.right(panel.borderSpec)
+    )
     contentHeight: panel.fittedContentHeight(column.implicitHeight, Style.space(560))
 
     Flickable {
@@ -184,32 +192,86 @@ Panel {
           }
         }
 
-        ListView {
-          id: list
+        Item {
           width: parent.width
-          height: root.visibleRows * root.rowHeight
+          height: (vmware.vms.length ? Style.font.bodySmall + Style.space(8) : 0) + root.visibleRows * root.rowHeight
           clip: true
-          boundsBehavior: Flickable.StopAtBounds
-          interactive: root.scrollable
-          model: vmware.vms
-          spacing: 0
-          delegate: Item {
-            width: list.width
-            height: root.rowHeight
-            readonly property var vm: modelData
 
-            FontMetrics {
-              id: nameMetrics
-              font.family: root.fontFamily
-              font.pixelSize: Style.font.body
+          Column {
+            anchors.fill: parent
+            spacing: 0
+
+            Row {
+              visible: vmware.vms.length > 0
+              width: listFlick.width - (root.scrollable ? Style.space(16) : 0)
+              height: visible ? Style.font.bodySmall + Style.space(8) : 0
+              spacing: Style.space(10)
+
+              Item { width: root.nameColWidth; height: 1 }
+
+              Row {
+                height: parent.height
+                spacing: 0
+
+                Text {
+                  width: root.hyperColWidth
+                  height: parent.height
+                  textFormat: Text.PlainText
+                  text: "Hypervisor"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
+                }
+
+                Item { width: root.groupGap; height: 1 }
+
+                Text {
+                  width: root.guestColWidth
+                  height: parent.height
+                  textFormat: Text.PlainText
+                  text: "GuestOS"
+                  color: root.dim
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.bodySmall
+                  horizontalAlignment: Text.AlignHCenter
+                  verticalAlignment: Text.AlignVCenter
+                }
+              }
             }
+
+          Flickable {
+            id: listFlick
+            width: parent.width
+            height: root.visibleRows * root.rowHeight
+            contentWidth: width
+            contentHeight: vmColumn.implicitHeight
+            clip: true
+            boundsBehavior: Flickable.StopAtBounds
+            flickableDirection: Flickable.VerticalFlick
+            interactive: root.scrollable
+            ScrollBar.vertical: ScrollBar {
+              policy: root.scrollable ? ScrollBar.AsNeeded : ScrollBar.AlwaysOff
+            }
+
+            Column {
+              id: vmColumn
+              width: listFlick.width - (root.scrollable ? Style.space(16) : 0)
+              Repeater {
+                model: vmware.vms
+                delegate: Item {
+                  required property var modelData
+                  width: vmColumn.width
+                  height: root.rowHeight
+                  readonly property var vm: modelData
 
             Row {
               anchors.fill: parent
               spacing: Style.space(10)
 
               Column {
-                width: Math.round(nameMetrics.averageCharacterWidth * 22)
+                width: root.nameColWidth
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: Style.space(2)
 
@@ -236,7 +298,7 @@ Panel {
                   }
                   Text {
                     textFormat: Text.PlainText
-                    text: vm.state === "missing" ? "off" : vm.state
+                    text: Model.statusLabel(vm.state, vmware.pendingSlot, vmware.pendingVmx, vm.vmx)
                     color: root.dim
                     font.family: root.fontFamily
                     font.pixelSize: Style.font.bodySmall
@@ -245,39 +307,65 @@ Panel {
               }
 
               Row {
-                spacing: Style.space(4)
+                spacing: 0
                 anchors.verticalCenter: parent.verticalCenter
 
-                Repeater {
-                  model: 3
-                  VmActionButton {
-                    required property int index
-                    iconText: root.slotGlyph(index + 1)
-                    tooltipText: root.slotTip(index + 1)
-                    iconOffsetX: index === 1 ? -2 : 0
-                    enabled: vm.enabled[index]
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                    onClicked: vmware.runSlot(index + 1, vm.vmx)
+                Item {
+                  width: root.hyperColWidth
+                  height: root.iconBtnSize
+                  Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: root.iconGap
+                    Repeater {
+                      model: 3
+                      VmActionButton {
+                        required property int index
+                        readonly property int slot: index + 1
+                        size: root.iconBtnSize
+                        iconText: root.slotGlyph(slot)
+                        tooltipText: Model.hardTooltip(slot)
+                        enabled: (Number(vm.slotsMask) & (1 << (slot - 1))) !== 0
+                        foreground: root.foreground
+                        fontFamily: root.fontFamily
+                        onClicked: vmware.runSlot(Number(slot), String(vm.vmx))
+                      }
+                    }
                   }
                 }
 
-                Item { width: Style.space(8); height: 1 }
+                Item { width: root.groupGap; height: 1 }
 
-                Repeater {
-                  model: 3
-                  VmActionButton {
-                    required property int index
-                    iconText: root.slotGlyph(index + 4)
-                    tooltipText: root.slotTip(index + 4)
-                    enabled: vm.enabled[index + 3]
-                    foreground: root.foreground
-                    fontFamily: root.fontFamily
-                    onClicked: vmware.runSlot(index + 4, vm.vmx)
+                Item {
+                  width: root.guestColWidth
+                  height: root.iconBtnSize
+                  Row {
+                    anchors.horizontalCenter: parent.horizontalCenter
+                    anchors.verticalCenter: parent.verticalCenter
+                    spacing: root.iconGap
+                    Repeater {
+                      model: 3
+                      VmActionButton {
+                        required property int index
+                        readonly property int slot: index + 4
+                        size: root.iconBtnSize
+                        iconText: root.slotGlyph(slot)
+                        tooltipText: Model.guestWord(slot)
+                        iconOffsetX: slot === 5 ? -2 : 0
+                        enabled: (Number(vm.slotsMask) & (1 << (slot - 1))) !== 0
+                        foreground: root.foreground
+                        fontFamily: root.fontFamily
+                        onClicked: vmware.runSlot(Number(slot), String(vm.vmx))
+                      }
+                    }
                   }
                 }
               }
             }
+                }
+              }
+            }
+          }
           }
         }
 

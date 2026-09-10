@@ -29,6 +29,7 @@ BorderSurface {
   id: root
 
   property string iconText: ""
+  property string label: ""
   property string tooltipText: ""
   property color foreground: Color.foreground
   property color hoverColor: foreground
@@ -49,7 +50,7 @@ BorderSurface {
   Keys.onEnterPressed: if (focusable) root.clicked()
   Keys.onSpacePressed: if (focusable) root.clicked()
 
-  implicitWidth: size
+  implicitWidth: label !== "" ? Math.ceil(word.implicitWidth) + Style.space(8) : size
   implicitHeight: size
   radius: Style.cornerRadius
 
@@ -71,7 +72,21 @@ BorderSurface {
   Behavior on color { ColorAnimation { duration: 60 } }
 
   Text {
+    id: word
     textFormat: Text.PlainText
+    visible: root.label !== ""
+    anchors.centerIn: parent
+    text: root.label
+    color: root.enabled
+      ? (root._hot ? root.hoverColor : root.foreground)
+      : Qt.darker(root.foreground, 2.0)
+    font.family: root.fontFamily
+    font.pixelSize: root.fontSize
+  }
+
+  Text {
+    textFormat: Text.PlainText
+    visible: root.label === ""
     anchors.centerIn: parent
     anchors.horizontalCenterOffset: root.iconOffsetX
     text: root.iconText
@@ -88,8 +103,11 @@ BorderSurface {
     hoverEnabled: true
     cursorShape: root.enabled ? Qt.PointingHandCursor : Qt.ArrowCursor
     enabled: root.enabled
+    preventStealing: true
+    acceptedButtons: Qt.LeftButton
     onContainsMouseChanged: root.hovered(containsMouse)
-    onClicked: {
+    onPressed: function (mouse) {
+      mouse.accepted = true
       if (root.focusable) root.forceActiveFocus()
       root.clicked()
     }

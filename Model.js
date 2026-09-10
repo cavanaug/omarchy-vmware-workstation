@@ -55,49 +55,139 @@ function powerState(vmx, runningPaths, vmssExists, vmxExists) {
 }
 
 function slotsEnabled(state) {
-  if (state === "running") return [false, true, true, true, true, true]
-  if (state === "suspended") return [true, true, false, false, false, false]
-  if (state === "off") return [true, false, false, false, false, false]
+  if (state === "running") return [true, true, false, true, true, true]
+  if (state === "suspended") return [true, false, true, false, false, false]
+  if (state === "off") return [false, false, true, false, false, false]
   return [false, false, false, false, false, false]
+}
+
+function slotsMask(state) {
+  var bits = slotsEnabled(state)
+  var mask = 0
+  for (var i = 0; i < bits.length; i++) {
+    if (bits[i]) mask |= (1 << i)
+  }
+  return mask
+}
+
+function statusLabel(state, pendingSlot, pendingVmx, vmx) {
+  var slot = Number(pendingSlot)
+  if (slot && sameVmx(vmx, pendingVmx)) {
+    if (slot === 1) return "powering off"
+    if (slot === 2) return "suspending"
+    if (slot === 3) return state === "suspended" ? "resuming" : "starting"
+    if (slot === 4) return "shutting down"
+    if (slot === 5) return "sleeping"
+    if (slot === 6) return "restarting"
+  }
+  if (state === "missing") return "off"
+  return String(state || "off")
+}
+
+// Keep the busy word after vmrun exits until a poll sees the new power
+// state. Resume returns while .vmss still exists, so clearing on exit
+// flickers "resuming" → "suspended" → "running".
+function shouldHoldPending(slot, observedState) {
+  slot = Number(slot)
+  var state = String(observedState || "")
+  if (slot === 1 || slot === 4) return state !== "off" && state !== "missing"
+  if (slot === 2 || slot === 5) return state !== "suspended"
+  if (slot === 3) return state !== "running"
+  return false
+}
+
+function hardTooltip(slot) {
+  slot = Number(slot)
+  if (slot === 1) return "PowerOff"
+  if (slot === 2) return "Suspend"
+  if (slot === 3) return "Resume"
+  return ""
+}
+
+function guestWord(slot) {
+  slot = Number(slot)
+  if (slot === 4) return "Shutdown"
+  if (slot === 5) return "Sleep"
+  if (slot === 6) return "Restart"
+  return ""
 }
 
 function commandForSlot(slot, vmx) {
   var path = String(vmx || "")
-  if (slot === 1) return ["vmrun", "-T", "ws", "start", path, "gui"]
-  if (slot === 2) return ["vmrun", "-T", "ws", "stop", path, "hard"]
-  if (slot === 3) return ["vmrun", "-T", "ws", "suspend", path, "hard"]
+  slot = Number(slot)
+  if (slot === 1) return ["vmrun", "-T", "ws", "stop", path, "hard"]
+  if (slot === 2) return ["vmrun", "-T", "ws", "suspend", path, "hard"]
+  if (slot === 3) return ["vmrun", "-T", "ws", "start", path, "gui"]
   if (slot === 4) return ["vmrun", "-T", "ws", "stop", path, "soft"]
   if (slot === 5) return ["vmrun", "-T", "ws", "suspend", path, "soft"]
   if (slot === 6) return ["vmrun", "-T", "ws", "reset", path, "soft"]
   return []
 }
 
-function openWorkstationCommand(gtkLaunchExists, hidpiExists) {
-  if (gtkLaunchExists) return ["gtk-launch", "vmware-workstation"]
-  if (hidpiExists) {
-    var home = ""
-    if (typeof Quickshell !== "undefined" && Quickshell.env) home = Quickshell.env("HOME") || ""
-    else if (typeof process !== "undefined") home = require("os").homedir()
-    return [home + "/.local/bin/vmware-hidpi"]
-  }
-  return ["/usr/bin/vmware"]
+function openWorkstationCommand() {
+  return ["omarchy-launch-or-focus", "^vmware$", "/usr/bin/vmware"]
+}
+
+function formatActionError(stdout, stderr, code) {
+  var out = String(stdout || "").replace(/^\s+|\s+$/g, "")
+  if (out) return out
+  var err = String(stderr || "").replace(/^\s+|\s+$/g, "")
+  if (err) return err
+  return "vmrun failed (exit " + Number(code) + ")"
 }
 
 function shellQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
+function vmrunWithKeyringScript(cmd) {
+  var argv = cmd || []
+  var rest = argv.slice(3)
+  var vmx = ""
+  for (var i = 0; i < rest.length; i++) {
+    if (/\.vmx$/i.test(String(rest[i] || ""))) {
+      vmx = String(rest[i])
+      break
+    }
+  }
+  var args = []
+  for (var j = 0; j < rest.length; j++) args.push(shellQuote(rest[j]))
+  var quoted = args.join(" ")
+  return [
+    "vmx=" + shellQuote(vmx),
+    "pw=",
+    "if command -v secret-tool >/dev/null 2>&1; then",
+    "  pw=$(secret-tool lookup path \"$vmx\" 2>/dev/null || true)",
+    "  if [ -z \"$pw\" ]; then",
+    "    guid=$(sed -n 's/^encryptedVM\\.guid = \"\\(.*\\)\"/\\1/p' \"$vmx\" 2>/dev/null | head -n 1)",
+    "    [ -n \"$guid\" ] && pw=$(secret-tool lookup encryptedVM.guid \"$guid\" 2>/dev/null || true)",
+    "  fi",
+    "fi",
+    "if [ -n \"$pw\" ]; then",
+    "  exec vmrun -T ws -vp \"$pw\" " + quoted,
+    "fi",
+    "exec vmrun -T ws " + quoted
+  ].join("\n")
+}
+
 function vmssProbeScript(vmxPaths) {
-  var parts = ["set -e"]
+  var parts = []
   var paths = vmxPaths || []
   for (var i = 0; i < paths.length; i++) {
     var p = String(paths[i] || "")
     if (!p) continue
     parts.push("p=" + shellQuote(p))
-    parts.push("s=${p%.vmx}")
-    parts.push("s=${s%.VMX}.vmss")
-    parts.push("[ -f \"$s\" ] && printf '%s\\n' \"$p\"")
+    parts.push("d=$(dirname -- \"$p\")")
+    parts.push("b=$(basename -- \"$p\")")
+    parts.push("b=${b%.vmx}")
+    parts.push("b=${b%.VMX}")
+    parts.push("found=")
+    parts.push("for s in \"$d/$b\".vmss \"$d/$b\".VMSS \"$d/$b\"-*.vmss \"$d/$b\"-*.VMSS; do")
+    parts.push("  [ -f \"$s\" ] && found=1 && break")
+    parts.push("done")
+    parts.push("[ -n \"$found\" ] && printf '%s\\n' \"$p\"")
   }
+  parts.push("true")
   return parts.join("\n")
 }
 
@@ -118,9 +208,16 @@ if (typeof module !== "undefined") {
     vmssPath: vmssPath,
     powerState: powerState,
     slotsEnabled: slotsEnabled,
+    slotsMask: slotsMask,
+    statusLabel: statusLabel,
+    shouldHoldPending: shouldHoldPending,
+    hardTooltip: hardTooltip,
+    guestWord: guestWord,
     commandForSlot: commandForSlot,
     openWorkstationCommand: openWorkstationCommand,
+    formatActionError: formatActionError,
     shellQuote: shellQuote,
+    vmrunWithKeyringScript: vmrunWithKeyringScript,
     vmssProbeScript: vmssProbeScript,
     runningCount: runningCount
   }
