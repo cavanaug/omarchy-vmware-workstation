@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Ship a user Omarchy bar widget whose source of truth is `~/wip_other/src_cavanaug/cavanaug.vmware` (symlinked at `~/.config/omarchy/plugins/cavanaug.vmware`) that lists the Workstation library and runs power/guest actions via `vmrun`.
+**Goal:** Ship a user Omarchy bar widget whose source of truth is `~/wip_other/src_cavanaug/omarchy-vmware-workstation` (symlinked at `~/.config/omarchy/plugins/cavanaug.vmware`) that lists the Workstation library and runs power/guest actions via `vmrun`.
 
 **Architecture:** Tailscale-shaped `bar-widget`: `Panel.qml` owns the bar button and popup; it instantiates `Service.qml`, which polls inventory + `vmrun` and runs one `Process` at a time. Pure helpers live in `Model.js` and are proven by a Node self-check before any QML is written.
 
@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Spec: `docs/superpowers/specs/2026-09-09-vmware-bar-plugin-design.md` — follow it; do not invent features.
-- Source of truth: `~/wip_other/src_cavanaug/cavanaug.vmware`. `~/.config/omarchy/plugins/cavanaug.vmware` is a symlink to that repo; task paths under the plugins directory still apply.
+- Source of truth: `~/wip_other/src_cavanaug/omarchy-vmware-workstation`. `~/.config/omarchy/plugins/cavanaug.vmware` is a symlink to that repo; task paths under the plugins directory still apply.
 - Do not edit `/usr/share/omarchy/`.
 - Plugin id is exactly `cavanaug.vmware`.
 - `vmrun start … gui` (not `nogui`).

@@ -2,7 +2,7 @@
 
 **Date:** 2026-09-09
 **Status:** Approved design
-**Location:** `~/wip_other/src_cavanaug/cavanaug.vmware` (symlinked at `~/.config/omarchy/plugins/cavanaug.vmware`)
+**Location:** `~/wip_other/src_cavanaug/omarchy-vmware-workstation` (symlinked at `~/.config/omarchy/plugins/cavanaug.vmware`)
 
 ## Goal
 
