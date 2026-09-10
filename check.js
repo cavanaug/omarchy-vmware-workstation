@@ -166,6 +166,23 @@ eq("guest actions use guest words as tooltips", panel.indexOf("Model.guestWord")
 eq("column headers Hypervisor and GuestOS", panel.indexOf('"Hypervisor"') !== -1 && panel.indexOf('"GuestOS"') !== -1, true)
 eq("header columns size to labels and buttons", panel.indexOf("hyperColWidth") !== -1 && panel.indexOf("guestColWidth") !== -1, true)
 
+var PLUGIN_ID = "io.github.cavanaug.vmware-workstation"
+var manifest = JSON.parse(fs.readFileSync("./manifest.json", "utf8"))
+eq("manifest id", manifest.id, PLUGIN_ID)
+eq("panel moduleName", panel.indexOf('moduleName: "' + PLUGIN_ID + '"') !== -1, true)
+eq("panel ipcTarget", panel.indexOf('ipcTarget: "' + PLUGIN_ID + '"') !== -1, true)
+eq("LICENSE exists", fs.existsSync("./LICENSE"), true)
+eq("LICENSE is MIT", fs.existsSync("./LICENSE") && fs.readFileSync("./LICENSE", "utf8").indexOf("MIT License") !== -1, true)
+eq("LICENSE copyright", fs.existsSync("./LICENSE") && fs.readFileSync("./LICENSE", "utf8").indexOf("Copyright (c) 2026 John Cavanaugh") !== -1, true)
+
+var readme = fs.readFileSync("./README.md", "utf8")
+eq("README install git url", readme.indexOf("omarchy plugin add https://github.com/cavanaug/omarchy-vmware-workstation.git --enable") !== -1, true)
+eq("README update command", readme.indexOf("omarchy plugin update io.github.cavanaug.vmware-workstation") !== -1, true)
+eq("README remove command", readme.indexOf("omarchy plugin remove io.github.cavanaug.vmware-workstation") !== -1, true)
+eq("README shows preview.png", readme.indexOf("preview.png") !== -1, true)
+eq("README has no wip symlink", readme.indexOf("wip_other") === -1, true)
+eq("preview.png exists", fs.existsSync("./preview.png"), true)
+
 var os = require("os")
 var path = require("path")
 var { execFileSync } = require("child_process")

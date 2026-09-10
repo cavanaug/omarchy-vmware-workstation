@@ -8,8 +8,8 @@ import "Model.js" as Model
 
 Panel {
   id: root
-  moduleName: "cavanaug.vmware"
-  ipcTarget: "cavanaug.vmware"
+  moduleName: "io.github.cavanaug.vmware-workstation"
+  ipcTarget: "io.github.cavanaug.vmware-workstation"
   manageIpc: false
 
   readonly property color foreground: bar ? bar.foreground : Color.foreground

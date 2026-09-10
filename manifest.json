@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "id": "cavanaug.vmware",
+  "id": "io.github.cavanaug.vmware-workstation",
   "name": "VMware Workstation",
   "version": "1.0.0",
   "author": "cavanaug",
