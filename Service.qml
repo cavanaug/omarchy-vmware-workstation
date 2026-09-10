@@ -29,9 +29,14 @@ Item {
   property string _actionErr: ""
   property int _pendingSlot: 0
   property string _pendingVmx: ""
+  property bool _refreshQueued: false
 
   function refresh() {
-    if (busy) return
+    if (busy) {
+      _refreshQueued = true
+      return
+    }
+    _refreshQueued = false
     if (!installed) {
       if (!whichProcess.running) {
         whichProcess.command = ["which", "vmrun"]
@@ -159,6 +164,7 @@ Item {
     onExited: function (code) {
       if (code !== 0) {
         root.lastError = String(root._listErr || root._listOut || "vmrun list failed").replace(/^\s+|\s+$/g, "")
+        if (root._refreshQueued) root.refresh()
         return
       }
       root.finishPoll(root._listOut)
@@ -183,6 +189,7 @@ Item {
         else hits.push(line)
       }
       root.applyMissingVmx(hits, missing)
+      if (root._refreshQueued) root.refresh()
     }
   }
 
