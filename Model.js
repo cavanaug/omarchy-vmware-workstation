@@ -55,10 +55,10 @@ function powerState(vmx, runningPaths, vmssExists, vmxExists) {
 }
 
 function slotsEnabled(state) {
-  if (state === "running") return [true, true, false, true, true, true]
-  if (state === "suspended") return [true, false, true, false, false, false]
-  if (state === "off") return [false, false, true, false, false, false]
-  return [false, false, false, false, false, false]
+  if (state === "running") return [true, true, false, true, true, true, false]
+  if (state === "suspended") return [true, false, true, false, false, false, true]
+  if (state === "off") return [false, false, true, false, false, false, true]
+  return [false, false, false, false, false, false, false]
 }
 
 function slotsMask(state) {
@@ -75,7 +75,7 @@ function statusLabel(state, pendingSlot, pendingVmx, vmx) {
   if (slot && sameVmx(vmx, pendingVmx)) {
     if (slot === 1) return "powering off"
     if (slot === 2) return "suspending"
-    if (slot === 3) return state === "suspended" ? "resuming" : "starting"
+    if (slot === 3 || slot === 7) return state === "suspended" ? "resuming" : "starting"
     if (slot === 4) return "shutting down"
     if (slot === 5) return "sleeping"
     if (slot === 6) return "restarting"
@@ -92,7 +92,7 @@ function shouldHoldPending(slot, observedState) {
   var state = String(observedState || "")
   if (slot === 1 || slot === 4) return state !== "off" && state !== "missing"
   if (slot === 2 || slot === 5) return state !== "suspended"
-  if (slot === 3) return state !== "running"
+  if (slot === 3 || slot === 7) return state !== "running"
   return false
 }
 
@@ -109,6 +109,7 @@ function guestWord(slot) {
   if (slot === 4) return "Shutdown"
   if (slot === 5) return "Sleep"
   if (slot === 6) return "Restart"
+  if (slot === 7) return "Startup"
   return ""
 }
 
@@ -117,10 +118,11 @@ function commandForSlot(slot, vmx) {
   slot = Number(slot)
   if (slot === 1) return ["vmrun", "-T", "ws", "stop", path, "hard"]
   if (slot === 2) return ["vmrun", "-T", "ws", "suspend", path, "hard"]
-  if (slot === 3) return ["vmrun", "-T", "ws", "start", path, "gui"]
+  if (slot === 3) return ["vmrun", "-T", "ws", "start", path]
   if (slot === 4) return ["vmrun", "-T", "ws", "stop", path, "soft"]
   if (slot === 5) return ["vmrun", "-T", "ws", "suspend", path, "soft"]
   if (slot === 6) return ["vmrun", "-T", "ws", "reset", path, "soft"]
+  if (slot === 7) return ["vmrun", "-T", "ws", "start", path]
   return []
 }
 
@@ -140,9 +142,21 @@ function shellQuote(s) {
   return "'" + String(s).replace(/'/g, "'\\''") + "'"
 }
 
+// vmrun accepts an encrypted VM's password ONLY via `-vp` on the command line —
+// no env var, stdin, prompt, or keyring support (verified against vmrun 1.17;
+// the binary links no keyring libraries). Workstation's GUI saves the secret to
+// the desktop keyring but only the GUI reads it back. The wrapper below does
+// that lookup (by .vmx path, falling back to encryptedVM.guid) and injects
+// `-vp`. It is gated behind the opt-in keyringPassword setting because while
+// vmrun runs, the password is readable in ps / /proc/<pid>/cmdline by every
+// local user account.
 function vmrunWithKeyringScript(cmd) {
+  // Works for any vmrun argv: the binary name is re-emitted literally and
+  // every remaining argument is shell-quoted, so the layout of global flags
+  // (`-T ws` or otherwise) stays the caller's choice.
   var argv = cmd || []
-  var rest = argv.slice(3)
+  var bin = argv.length ? String(argv[0]) : "vmrun"
+  var rest = argv.length > 1 ? argv.slice(1) : []
   var vmx = ""
   for (var i = 0; i < rest.length; i++) {
     if (/\.vmx$/i.test(String(rest[i] || ""))) {
@@ -164,9 +178,9 @@ function vmrunWithKeyringScript(cmd) {
     "  fi",
     "fi",
     "if [ -n \"$pw\" ]; then",
-    "  exec vmrun -T ws -vp \"$pw\" " + quoted,
+    "  exec " + shellQuote(bin) + " -vp \"$pw\" " + quoted,
     "fi",
-    "exec vmrun -T ws " + quoted
+    "exec " + shellQuote(bin) + " " + quoted
   ].join("\n")
 }
 
@@ -179,8 +193,10 @@ function vmssProbeScript(vmxPaths) {
     parts.push("p=" + shellQuote(p))
     parts.push("d=$(dirname -- \"$p\")")
     parts.push("b=$(basename -- \"$p\")")
+    // Lowercase before stripping so the stem matches Model.vmssPath, which
+    // treats the .vmx extension case-insensitively (e.g. `a.Vmx` inventories).
+    parts.push("b=${b,,}")
     parts.push("b=${b%.vmx}")
-    parts.push("b=${b%.VMX}")
     parts.push("found=")
     parts.push("for s in \"$d/$b\".vmss \"$d/$b\".VMSS \"$d/$b\"-*.vmss \"$d/$b\"-*.VMSS; do")
     parts.push("  [ -f \"$s\" ] && found=1 && break")

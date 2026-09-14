@@ -19,6 +19,12 @@ Item {
     return n
   }
   readonly property string inventoryPath: (Quickshell.env("HOME") || "") + "/.vmware/inventory.vmls"
+  readonly property bool keyringPassword: {
+    var v = settings && settings.keyringPassword != null ? settings.keyringPassword : null
+    if (v === true) return true
+    var s = String(v == null ? "false" : v).toLowerCase()
+    return s === "true" || s === "on" || s === "1"
+  }
   readonly property bool busy: whichProcess.running || listProcess.running || vmssProcess.running || actionProcess.running
 
   property var _inventory: []
@@ -95,12 +101,19 @@ Item {
       return
     }
     if (actionProcess.running) return
+    expirePending()
+    if (pendingSlot) delayedRefresh.restart()
+  }
+
+  // settlePending only runs after a good list+probe, so polls that keep
+  // failing while an action is pending would hold the row's buttons disabled
+  // forever. The hold deadline is therefore also enforced on failure paths.
+  function expirePending() {
+    if (!pendingSlot || actionProcess.running) return
     if (_pendingHoldUntilMs && Date.now() >= _pendingHoldUntilMs) {
       pendingSlot = 0
       pendingVmx = ""
-      return
     }
-    delayedRefresh.restart()
   }
 
   function finishPoll(listText) {
@@ -130,7 +143,9 @@ Item {
       lastError = "unknown action"
       return
     }
-    var argv = ["bash", "-c", Model.vmrunWithKeyringScript(cmd)]
+    // Opt-in (keyringPassword, default off): wraps the command so the keyring
+    // password is injected as `vmrun -vp <pw>` — readable in ps while it runs.
+    var argv = keyringPassword ? ["bash", "-c", Model.vmrunWithKeyringScript(cmd)] : cmd
     _actionOut = ""
     _actionErr = ""
     pendingSlot = Number(slot)
@@ -208,6 +223,7 @@ Item {
       if (!root.installed) {
         root.lastError = "vmrun is not installed or not on PATH."
         root.vms = []
+        root.expirePending()
         return
       }
       delayedRefresh.restart()
@@ -227,6 +243,7 @@ Item {
     }
     onExited: function (code) {
       if (code !== 0) {
+        root.expirePending()
         root.lastError = String(root._listErr || root._listOut || "vmrun list failed").replace(/^\s+|\s+$/g, "")
         return
       }

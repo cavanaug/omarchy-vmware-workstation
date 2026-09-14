@@ -18,7 +18,8 @@
     "defaultSection": "right",
     "defaults": {
       "icon_style": "branded",
-      "refreshIntervalSec": 30
+      "refreshIntervalSec": 30,
+      "keyringPassword": false
     },
     "schema": [
       {
@@ -36,6 +37,12 @@
         "max": 3600,
         "step": 5,
         "defaultValue": 30
+      },
+      {
+        "key": "keyringPassword",
+        "type": "boolean",
+        "label": "Keyring password for encrypted VMs (see README security notes)",
+        "defaultValue": false
       }
     ]
   }
