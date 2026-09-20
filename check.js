@@ -104,9 +104,15 @@ eq("slot 1 stop hard",
 eq("slot 2 suspend hard",
   M.commandForSlot(2, "/a.vmx"),
   ["vmrun", "-T", "ws", "suspend", "/a.vmx", "hard"])
-eq("slot 3 start headless",
+eq("slot 3 starts without a console by default",
   M.commandForSlot(3, "/a.vmx"),
-  ["vmrun", "-T", "ws", "start", "/a.vmx"])
+  ["vmrun", "-T", "ws", "start", "/a.vmx", "nogui"])
+eq("slot 3 starts with a console when requested",
+  M.commandForSlot(3, "/a.vmx", "gui"),
+  ["vmrun", "-T", "ws", "start", "/a.vmx", "gui"])
+eq("slot 3 falls back to no console for an invalid strategy",
+  M.commandForSlot(3, "/a.vmx", "GUI"),
+  ["vmrun", "-T", "ws", "start", "/a.vmx", "nogui"])
 eq("slot 4 stop soft",
   M.commandForSlot(4, "/a.vmx"),
   ["vmrun", "-T", "ws", "stop", "/a.vmx", "soft"])
@@ -116,10 +122,38 @@ eq("slot 5 suspend soft",
 eq("slot 6 reset soft",
   M.commandForSlot(6, "/a.vmx"),
   ["vmrun", "-T", "ws", "reset", "/a.vmx", "soft"])
-eq("slot 7 startup", M.commandForSlot(7, "/a.vmx"), ["vmrun", "-T", "ws", "start", "/a.vmx"])
+eq("slot 7 starts without a console by default", M.commandForSlot(7, "/a.vmx"), ["vmrun", "-T", "ws", "start", "/a.vmx", "nogui"])
+eq("slot 7 starts with a console when requested", M.commandForSlot(7, "/a.vmx", "gui"), ["vmrun", "-T", "ws", "start", "/a.vmx", "gui"])
 eq("slot 2 from string",
   M.commandForSlot("2", "/a.vmx"),
   ["vmrun", "-T", "ws", "suspend", "/a.vmx", "hard"])
+
+var bulkTargets = [
+    { vmx: "/a.vmx", state: "running" },
+    { vmx: "/b.vmx", state: "off" },
+    { vmx: "/c.vmx", state: "suspended" },
+    { vmx: "/d.vmx", state: "running" }
+  ]
+var bulkCommand = typeof M.bulkCommand === "function" ? M.bulkCommand : function () { return [] }
+var bulkQueueCommand = typeof M.bulkQueueCommand === "function" ? M.bulkQueueCommand : function () { return [] }
+eq("bulk actions target only running VMs",
+  typeof M.runningVmxPaths === "function" ? M.runningVmxPaths(bulkTargets) : [],
+  ["/a.vmx", "/d.vmx"])
+eq("bulk shutdown uses a guest soft stop", bulkCommand("shutdown", "/a.vmx"), ["vmrun", "-T", "ws", "stop", "/a.vmx", "soft"])
+eq("bulk suspend uses a hard suspend", bulkCommand("suspend", "/a.vmx"), ["vmrun", "-T", "ws", "suspend", "/a.vmx", "hard"])
+eq("bulk pause uses vmrun pause", bulkCommand("pause", "/a.vmx"), ["vmrun", "-T", "ws", "pause", "/a.vmx"])
+eq("unknown bulk operation has no command", bulkCommand("reset", "/a.vmx"), [])
+eq("bulk queue dispatches commands in target order",
+  [
+    bulkQueueCommand("pause", ["/a.vmx", "/d.vmx"], 0),
+    bulkQueueCommand("pause", ["/a.vmx", "/d.vmx"], 1),
+    bulkQueueCommand("pause", ["/a.vmx", "/d.vmx"], 2)
+  ],
+  [
+    ["vmrun", "-T", "ws", "pause", "/a.vmx"],
+    ["vmrun", "-T", "ws", "pause", "/d.vmx"],
+    []
+  ])
 
 eq("open focuses existing Workstation",
   M.openWorkstationCommand(),
@@ -152,7 +186,7 @@ eq("runningCount",
 
 var service = fs.readFileSync("./Service.qml", "utf8")
 eq("refresh is not aggregate busy gated", service.indexOf("if (busy)") === -1, true)
-eq("actions are independently gated", service.indexOf("if (!installed || actionProcess.running || !vmx)") !== -1, true)
+eq("actions are independently gated", service.indexOf("if (!installed || actionProcess.running || bulkRunning || !vmx)") !== -1, true)
 eq("exits defer refresh", (service.match(/delayedRefresh\.restart\(\)/g) || []).length >= 2, true)
 eq("poll watchdog covers every process",
   ["whichProcess", "listProcess", "vmssProcess", "actionProcess"].every(function (name) {
@@ -167,13 +201,17 @@ eq("actions start with Process.exec", service.indexOf("actionProcess.exec(argv)"
 eq("pending holds until polled state matches", service.indexOf("shouldHoldPending") !== -1, true)
 eq("pending slot clears when settled", service.indexOf("pendingSlot = 0") !== -1, true)
 eq("failing polls expire an overdue pending", service.indexOf("root.expirePending()") !== -1, true)
+eq("bulk actions are queued through the action process", service.indexOf("function runBulk") !== -1 && service.indexOf("function runNextBulk") !== -1, true)
+var listProcessSource = service.slice(service.indexOf("id: listProcess"), service.indexOf("id: vmssProcess"))
+var actionProcessSource = service.slice(service.indexOf("id: actionProcess"))
+eq("bulk queue advances only after each action exits", listProcessSource.indexOf("finishBulkAction") === -1 && actionProcessSource.indexOf("finishBulkAction") !== -1, true)
 
 var panel = fs.readFileSync("./Panel.qml", "utf8")
 eq("row status uses statusLabel", panel.indexOf("Model.statusLabel") !== -1, true)
 eq("hard actions use tooltips", panel.indexOf("Model.hardTooltip") !== -1, true)
 eq("guest actions use guest words as tooltips", panel.indexOf("Model.guestWord") !== -1, true)
 eq("two-line headers with hard/soft subtitles", panel.indexOf('"GuestOS\\n(soft)"') !== -1 && panel.indexOf('"Hypervisor\\n(hard)"') !== -1, true)
-var glyphFn = panel.slice(panel.indexOf("function slotGlyph"), panel.indexOf("function bulletColor"))
+var glyphFn = panel.slice(panel.indexOf("function slotGlyph"), panel.indexOf("function bulkGlyph"))
 var glyphReturns = (glyphFn.match(/return "([^"]*)"/g) || [])
 eq("slot glyphs cover slots 1-7 and empty fallback", glyphReturns.length === 8 && glyphReturns.slice(0, 7).every(function (r) { return r !== 'return ""' }) && glyphReturns[7] === 'return ""', true)
 eq("startup icon is play", glyphCode(glyphReturns[6]), "f040a")
@@ -185,9 +223,10 @@ function glyphCode(ret) {
 eq("poweroff icon is power_plug_off_outline", glyphCode(glyphReturns[0]), "f1424")
 eq("resume icon is power_plug", glyphCode(glyphReturns[2]), "f06a5")
 eq("restart icon is md-restart", glyphCode(glyphReturns[5]), "f0709")
-eq("glyphs are 1px over the icon token", (panel.match(/fontSize: Style\.font\.icon \+ 1/g) || []).length, 2)
+eq("glyphs are 1px over the icon token", (panel.match(/fontSize: Style\.font\.icon \+ 1/g) || []).length, 3)
 eq("guest column first, hypervisor second", panel.indexOf('"GuestOS\\n(soft)"') < panel.indexOf('"Hypervisor\\n(hard)"') && panel.indexOf("model: [4, 5, 7, 6]") !== -1 && panel.indexOf("model: [4, 5, 7, 6]") < panel.indexOf("slot: index + 1"), true)
 eq("guest order is shutdown sleep startup restart", panel.indexOf("model: [4, 5, 7, 6]") !== -1, true)
+eq("footer bulk controls are shutdown suspend pause", panel.indexOf('model: ["shutdown", "suspend", "pause"]') !== -1, true)
 eq("pending vm disables its buttons", (panel.match(/enabled: \(Number\(vm\.slotsMask\) & \(1 << \(slot - 1\)\)\) !== 0 && !root\.vmBusy\(vm\.vmx\)/g) || []).length, 2)
 eq("vmBusy gates on pendingSlot and sameVmx", panel.indexOf("function vmBusy") !== -1 && panel.indexOf("Model.sameVmx(vmware.pendingVmx, vmx)") !== -1, true)
 eq("header columns size to labels and buttons", panel.indexOf("hyperColWidth") !== -1 && panel.indexOf("guestColWidth") !== -1, true)
@@ -197,6 +236,8 @@ var manifest = JSON.parse(fs.readFileSync("./manifest.json", "utf8"))
 eq("manifest id", manifest.id, PLUGIN_ID)
 var keyringSchema = (manifest.barWidget.schema || []).filter(function (s) { return s.key === "keyringPassword" })[0] || {}
 eq("keyringPassword is boolean and default off", keyringSchema.type === "boolean" && keyringSchema.defaultValue === false && manifest.barWidget.defaults.keyringPassword === false, true)
+var openStrategySchema = (manifest.barWidget.schema || []).filter(function (s) { return s.key === "openStrategy" })[0] || {}
+eq("openStrategy is an enum that defaults to nogui", openStrategySchema.type === "enum" && JSON.stringify(openStrategySchema.options) === JSON.stringify(["nogui", "gui"]) && openStrategySchema.defaultValue === "nogui" && manifest.barWidget.defaults.openStrategy === "nogui", true)
 eq("panel moduleName", panel.indexOf('moduleName: "' + PLUGIN_ID + '"') !== -1, true)
 eq("panel ipcTarget", panel.indexOf('ipcTarget: "' + PLUGIN_ID + '"') !== -1, true)
 eq("LICENSE exists", fs.existsSync("./LICENSE"), true)

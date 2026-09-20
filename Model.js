@@ -113,17 +113,46 @@ function guestWord(slot) {
   return ""
 }
 
-function commandForSlot(slot, vmx) {
+function startStrategy(value) {
+  return String(value || "") === "gui" ? "gui" : "nogui"
+}
+
+function commandForSlot(slot, vmx, openStrategy) {
   var path = String(vmx || "")
+  var strategy = startStrategy(openStrategy)
   slot = Number(slot)
   if (slot === 1) return ["vmrun", "-T", "ws", "stop", path, "hard"]
   if (slot === 2) return ["vmrun", "-T", "ws", "suspend", path, "hard"]
-  if (slot === 3) return ["vmrun", "-T", "ws", "start", path]
+  if (slot === 3) return ["vmrun", "-T", "ws", "start", path, strategy]
   if (slot === 4) return ["vmrun", "-T", "ws", "stop", path, "soft"]
   if (slot === 5) return ["vmrun", "-T", "ws", "suspend", path, "soft"]
   if (slot === 6) return ["vmrun", "-T", "ws", "reset", path, "soft"]
-  if (slot === 7) return ["vmrun", "-T", "ws", "start", path]
+  if (slot === 7) return ["vmrun", "-T", "ws", "start", path, strategy]
   return []
+}
+
+function runningVmxPaths(vms) {
+  var out = []
+  var rows = vms || []
+  for (var i = 0; i < rows.length; i++) {
+    if (rows[i] && rows[i].state === "running" && rows[i].vmx) out.push(String(rows[i].vmx))
+  }
+  return out
+}
+
+function bulkCommand(action, vmx) {
+  var path = String(vmx || "")
+  if (action === "shutdown") return ["vmrun", "-T", "ws", "stop", path, "soft"]
+  if (action === "suspend") return ["vmrun", "-T", "ws", "suspend", path, "hard"]
+  if (action === "pause") return ["vmrun", "-T", "ws", "pause", path]
+  return []
+}
+
+function bulkQueueCommand(action, vmxPaths, index) {
+  var paths = vmxPaths || []
+  var i = Number(index)
+  if (!isFinite(i) || i < 0 || i >= paths.length) return []
+  return bulkCommand(action, paths[i])
 }
 
 function openWorkstationCommand() {
@@ -229,7 +258,11 @@ if (typeof module !== "undefined") {
     shouldHoldPending: shouldHoldPending,
     hardTooltip: hardTooltip,
     guestWord: guestWord,
+    startStrategy: startStrategy,
     commandForSlot: commandForSlot,
+    runningVmxPaths: runningVmxPaths,
+    bulkCommand: bulkCommand,
+    bulkQueueCommand: bulkQueueCommand,
     openWorkstationCommand: openWorkstationCommand,
     formatActionError: formatActionError,
     shellQuote: shellQuote,

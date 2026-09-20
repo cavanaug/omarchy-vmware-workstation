@@ -25,7 +25,9 @@ Item {
     var s = String(v == null ? "false" : v).toLowerCase()
     return s === "true" || s === "on" || s === "1"
   }
+  readonly property string openStrategy: Model.startStrategy(settings && settings.openStrategy)
   readonly property bool busy: whichProcess.running || listProcess.running || vmssProcess.running || actionProcess.running
+  readonly property bool bulkRunning: bulkAction !== ""
 
   property var _inventory: []
   property var _running: []
@@ -36,6 +38,10 @@ Item {
   property string _actionErr: ""
   property int pendingSlot: 0
   property string pendingVmx: ""
+  property string bulkAction: ""
+  property var bulkVmxPaths: []
+  property int bulkIndex: 0
+  property var bulkErrors: []
   property double _pendingHoldUntilMs: 0
   property double _whichStartedMs: 0
   property double _listStartedMs: 0
@@ -132,13 +138,13 @@ Item {
   }
 
   function runSlot(slot, vmx) {
-    if (!installed || actionProcess.running || !vmx) {
+    if (!installed || actionProcess.running || bulkRunning || !vmx) {
       if (!vmx) lastError = "missing vmx"
       else if (!installed) lastError = "vmrun is not installed or not on PATH."
       else lastError = "vmrun is busy"
       return
     }
-    var cmd = Model.commandForSlot(Number(slot), String(vmx))
+    var cmd = Model.commandForSlot(Number(slot), String(vmx), openStrategy)
     if (!cmd.length) {
       lastError = "unknown action"
       return
@@ -154,6 +160,51 @@ Item {
     lastError = ""
     _actionStartedMs = Date.now()
     actionProcess.exec(argv)
+  }
+
+  function runBulk(action) {
+    if (!installed || actionProcess.running || bulkRunning) {
+      if (!installed) lastError = "vmrun is not installed or not on PATH."
+      else lastError = "vmrun is busy"
+      return
+    }
+    var paths = Model.runningVmxPaths(vms)
+    if (!paths.length) return
+    if (!Model.bulkCommand(String(action), paths[0]).length) {
+      lastError = "unknown bulk action"
+      return
+    }
+    bulkAction = String(action)
+    bulkVmxPaths = paths
+    bulkIndex = 0
+    bulkErrors = []
+    lastError = ""
+    runNextBulk()
+  }
+
+  function runNextBulk() {
+    if (bulkIndex >= bulkVmxPaths.length) {
+      if (bulkErrors.length) lastError = bulkErrors.join("\n")
+      bulkAction = ""
+      bulkVmxPaths = []
+      bulkIndex = 0
+      delayedRefresh.restart()
+      return
+    }
+    var cmd = Model.bulkQueueCommand(bulkAction, bulkVmxPaths, bulkIndex)
+    var argv = keyringPassword ? ["bash", "-c", Model.vmrunWithKeyringScript(cmd)] : cmd
+    _actionOut = ""
+    _actionErr = ""
+    _actionStartedMs = Date.now()
+    actionProcess.exec(argv)
+  }
+
+  function finishBulkAction(code) {
+    if (code !== 0) {
+      bulkErrors.push(bulkVmxPaths[bulkIndex] + ": " + Model.formatActionError(_actionOut, _actionErr, code))
+    }
+    bulkIndex += 1
+    runNextBulk()
   }
 
   function loadInventory(text) {
@@ -284,6 +335,10 @@ Item {
       onStreamFinished: root._actionErr = text
     }
     onExited: function (code) {
+      if (root.bulkAction) {
+        root.finishBulkAction(code)
+        return
+      }
       if (code !== 0) {
         root.pendingSlot = 0
         root.pendingVmx = ""

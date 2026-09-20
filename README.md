@@ -20,7 +20,7 @@ omarchy plugin add https://github.com/cavanaug/omarchy-vmware-workstation.git --
 
 ## What it does
 
-A Workstation mark on the bar. Click it for the panel: how many VMs are running, **Open** to launch Workstation, and one row per library VM.
+A Workstation mark on the bar. Click it for the panel: how many VMs are running, **Open** to launch Workstation, bulk controls for all running VMs, and one row per library VM.
 
 Unavailable actions stay visible and dimmed.
 
@@ -36,7 +36,9 @@ Unavailable actions stay visible and dimmed.
 
 Guest actions stay enabled whenever the VM is running. The plugin does not probe VMware Tools; if Tools is missing the action fails and the panel shows the error.
 
-Resume and Startup run `vmrun start` without the `gui` option, so VMs start headless; use **Open** to bring up the Workstation console.
+When any VMs are running, the footer provides bulk **Shutdown**, **Suspend**, and **Pause** controls. The selected action is applied to every running VM in sequence; errors are collected and shown after the queue finishes.
+
+Resume and Startup use the configured [VM start display](#settings). The default `nogui` mode starts VMs without a console; choose `gui` to open their console windows.
 
 ## Settings
 
@@ -46,6 +48,7 @@ Configure the widget in Omarchy bar settings.
 | --- | --- | --- |
 | Bar icon | branded | `branded` (color Workstation mark) or `themed` (mono, tinted to the bar) |
 | Refresh interval (seconds) | 30 | 5–3600, step 5 |
+| VM start display | no console | `nogui` starts Resume and Startup without a console; `gui` opens a console window |
 | Keyring password for encrypted VMs | off | Opt-in. Reads the saved VM password from your keyring and passes it to `vmrun -vp` on the command line. Read the [Security notes](#security-notes) before enabling. |
 
 ## Security notes

@@ -64,6 +64,20 @@ Panel {
     return ""
   }
 
+  function bulkGlyph(action) {
+    if (action === "shutdown") return slotGlyph(4)
+    if (action === "suspend") return slotGlyph(2)
+    if (action === "pause") return slotGlyph(5)
+    return ""
+  }
+
+  function bulkTooltip(action) {
+    if (action === "shutdown") return "Shutdown all running VMs"
+    if (action === "suspend") return "Suspend all running VMs"
+    if (action === "pause") return "Pause all running VMs"
+    return ""
+  }
+
   function bulletColor(state) {
     if (state === "running") return Qt.tint(Color.popups.background, Qt.rgba(158 / 255, 206 / 255, 106 / 255, 0.55))
     if (state === "suspended") return Qt.tint(Color.popups.background, Qt.rgba(235 / 255, 146 / 255, 123 / 255, 0.45))
@@ -374,6 +388,42 @@ Panel {
                     }
                   }
                 }
+              }
+            }
+          }
+        }
+
+        Item {
+          visible: vmware.runningCount > 0
+          width: parent.width
+          height: visible ? root.iconBtnSize : 0
+
+          Row {
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: root.iconGap
+
+            Text {
+              text: "All running VMs"
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.bodySmall
+              anchors.verticalCenter: parent.verticalCenter
+              rightPadding: Style.space(4)
+            }
+
+            Repeater {
+              model: ["shutdown", "suspend", "pause"]
+              VmActionButton {
+                required property string modelData
+                size: root.iconBtnSize
+                fontSize: Style.font.icon + 1
+                iconText: root.bulkGlyph(modelData)
+                tooltipText: root.bulkTooltip(modelData)
+                enabled: !vmware.busy && !vmware.bulkRunning
+                foreground: root.foreground
+                fontFamily: root.fontFamily
+                onClicked: vmware.runBulk(modelData)
               }
             }
           }
