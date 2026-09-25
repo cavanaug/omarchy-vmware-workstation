@@ -70,18 +70,90 @@ function slotsMask(state) {
   return mask
 }
 
+function pendingVerb(slot, state) {
+  slot = Number(slot)
+  if (slot === 1) return "powering off"
+  if (slot === 2) return "suspending"
+  if (slot === 3 || slot === 7) return state === "suspended" ? "resuming" : "starting"
+  if (slot === 4) return "shutting down"
+  if (slot === 5) return "sleeping"
+  if (slot === 6) return "restarting"
+  return ""
+}
+
 function statusLabel(state, pendingSlot, pendingVmx, vmx) {
   var slot = Number(pendingSlot)
   if (slot && sameVmx(vmx, pendingVmx)) {
-    if (slot === 1) return "powering off"
-    if (slot === 2) return "suspending"
-    if (slot === 3 || slot === 7) return state === "suspended" ? "resuming" : "starting"
-    if (slot === 4) return "shutting down"
-    if (slot === 5) return "sleeping"
-    if (slot === 6) return "restarting"
+    var verb = pendingVerb(slot, state)
+    if (verb) return verb
   }
   if (state === "missing") return "off"
   return String(state || "off")
+}
+
+// Row status with bulk awareness: single actions flow through statusLabel,
+// but bulk queues never set pendingSlot/pendingVmx — the VM the queue is
+// currently acting on shows the bulk gerund instead of its raw state, and a
+// VM whose bulk action just finished keeps that gerund (bulkHolds) until a
+// poll replaces its stale pre-action state.
+function rowStatusLabel(state, pendingSlot, pendingVmx, vmx, bulkAction, bulkVmx, bulkHolds) {
+  if (bulkAction && bulkVmx && sameVmx(vmx, bulkVmx)) {
+    var verb = bulkVerb(bulkAction)
+    if (verb) return verb
+  }
+  if (Number(pendingSlot) && sameVmx(vmx, pendingVmx)) {
+    return statusLabel(state, pendingSlot, pendingVmx, vmx)
+  }
+  var held = bulkHoldVerb(bulkHolds, vmx, state)
+  if (held) return held
+  return statusLabel(state, pendingSlot, pendingVmx, vmx)
+}
+
+function bulkVerb(action) {
+  if (action === "shutdown") return "shutting down"
+  if (action === "suspend") return "suspending"
+  if (action === "pause") return "pausing"
+  return ""
+}
+
+// The power state a finished bulk action should eventually show in a poll.
+// "" means the poll cannot observe the action's effect: `vmrun pause` keeps
+// the VM in the running list, so there is no post-action state to wait for.
+function bulkTargetState(action) {
+  if (action === "suspend") return "suspended"
+  if (action === "shutdown") return "off"
+  return ""
+}
+
+// When a bulk item's vmrun has exited but the next poll has not landed, the
+// row still carries the stale pre-action "running" state — reading it raw
+// flashes "suspending" → "running" → "suspended" as the queue advances. The
+// finished item keeps its gerund until a poll replaces that stale row.
+function bulkHoldVerb(bulkHolds, vmx, state) {
+  if (state !== "running") return ""
+  var holds = bulkHolds || []
+  for (var i = 0; i < holds.length; i++) {
+    if (sameVmx(holds[i].vmx, vmx)) return bulkVerb(holds[i].action)
+  }
+  return ""
+}
+
+// Sentence for the hero meta line while vmrun work is in flight: single
+// actions read "<verb> <vm name>", bulk queues read "<verb> n/total".
+// Returns "" when idle so the panel can fall back to the running count.
+function heroActivityText(pendingSlot, pendingName, pendingState, bulkAction, bulkIndex, bulkTotal) {
+  var bulk = bulkVerb(String(bulkAction || ""))
+  var total = Number(bulkTotal) || 0
+  if (bulk) {
+    if (total <= 0) return bulk
+    var done = Math.min((Number(bulkIndex) || 0) + 1, total)
+    return bulk + " " + done + "/" + total
+  }
+  if (Number(pendingSlot) && pendingName) {
+    var verb = pendingVerb(pendingSlot, pendingState)
+    if (verb) return verb + " " + String(pendingName)
+  }
+  return ""
 }
 
 // Keep the busy word after vmrun exits until a poll sees the new power
@@ -159,10 +231,19 @@ function openWorkstationCommand() {
   return ["omarchy-launch-or-focus", "^vmware$", "/usr/bin/vmware"]
 }
 
+// When vmrun hits a Msg_Question mid-action (e.g. the SVGA checkpoint
+// feature check after a host graphics/driver update), it cannot click a
+// dialog button: it aborts and the VM auto-replies Cancel, surfacing as
+// "Error: The operation was canceled". Translate that into what actually
+// happened and the one-click way out.
+var QUESTION_CANCEL_HINT = " — the VM is asking a question vmrun cannot answer (usually a host graphics or driver change since suspend). Resume the VM once in the Workstation GUI to accept it."
+
 function formatActionError(stdout, stderr, code) {
   var out = String(stdout || "").replace(/^\s+|\s+$/g, "")
+  if (/the operation was canceled/i.test(out)) return out + QUESTION_CANCEL_HINT
   if (out) return out
   var err = String(stderr || "").replace(/^\s+|\s+$/g, "")
+  if (/the operation was canceled/i.test(err)) return err + QUESTION_CANCEL_HINT
   if (err) return err
   return "vmrun failed (exit " + Number(code) + ")"
 }
@@ -255,6 +336,11 @@ if (typeof module !== "undefined") {
     slotsEnabled: slotsEnabled,
     slotsMask: slotsMask,
     statusLabel: statusLabel,
+    rowStatusLabel: rowStatusLabel,
+    pendingVerb: pendingVerb,
+    bulkVerb: bulkVerb,
+    bulkTargetState: bulkTargetState,
+    heroActivityText: heroActivityText,
     shouldHoldPending: shouldHoldPending,
     hardTooltip: hardTooltip,
     guestWord: guestWord,

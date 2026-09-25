@@ -28,6 +28,19 @@ Item {
   readonly property string openStrategy: Model.startStrategy(settings && settings.openStrategy)
   readonly property bool busy: whichProcess.running || listProcess.running || vmssProcess.running || actionProcess.running
   readonly property bool bulkRunning: bulkAction !== ""
+  // True while a vmrun action (single or bulk queue) owns the action
+  // process — the window in which runSlot/runBulk refuse new work. Excludes
+  // background polls so button gating doesn't flicker every refresh.
+  readonly property bool actionBusy: actionProcess.running || bulkRunning
+  readonly property string bulkCurrentVmx: bulkRunning && bulkIndex < bulkVmxPaths.length ? String(bulkVmxPaths[bulkIndex] || "") : ""
+  readonly property string heroActivity: Model.heroActivityText(
+    pendingSlot,
+    observedName(pendingVmx),
+    observedState(pendingVmx),
+    bulkAction,
+    bulkIndex,
+    bulkVmxPaths.length
+  )
 
   property var _inventory: []
   property var _running: []
@@ -42,6 +55,10 @@ Item {
   property var bulkVmxPaths: []
   property int bulkIndex: 0
   property var bulkErrors: []
+  // Bulk items whose vmrun finished but whose row still shows the stale
+  // pre-action "running" state: {vmx, action, untilMs} each. They keep the
+  // row's gerund until a poll lands; settleBulkHolds prunes them.
+  property var bulkHolds: []
   property double _pendingHoldUntilMs: 0
   property double _whichStartedMs: 0
   property double _listStartedMs: 0
@@ -89,14 +106,25 @@ Item {
     }
     vms = rows
     settlePending()
+    settleBulkHolds()
+  }
+
+  function observedRow(vmx) {
+    var rows = vms
+    for (var i = 0; i < rows.length; i++) {
+      if (Model.sameVmx(rows[i].vmx, vmx)) return rows[i]
+    }
+    return null
   }
 
   function observedState(vmx) {
-    var rows = vms
-    for (var i = 0; i < rows.length; i++) {
-      if (Model.sameVmx(rows[i].vmx, vmx)) return rows[i].state
-    }
-    return ""
+    var row = observedRow(vmx)
+    return row ? row.state : ""
+  }
+
+  function observedName(vmx) {
+    var row = observedRow(vmx)
+    return row ? row.name : ""
   }
 
   function settlePending() {
@@ -120,6 +148,19 @@ Item {
       pendingSlot = 0
       pendingVmx = ""
     }
+  }
+
+  // Bulk holds end when a poll replaces the stale "running" row with the
+  // real state (anything else means the poll spoke), or — mirroring
+  // expirePending — when their backstop deadline passes while polls fail.
+  function settleBulkHolds() {
+    if (bulkHolds.length === 0) return
+    var now = Date.now()
+    var kept = []
+    for (var i = 0; i < bulkHolds.length; i++) {
+      if (observedState(bulkHolds[i].vmx) === "running" && now < bulkHolds[i].untilMs) kept.push(bulkHolds[i])
+    }
+    if (kept.length !== bulkHolds.length) bulkHolds = kept
   }
 
   function finishPoll(listText) {
@@ -156,7 +197,10 @@ Item {
     _actionErr = ""
     pendingSlot = Number(slot)
     pendingVmx = String(vmx)
-    _pendingHoldUntilMs = 0
+    // Arm at dispatch as a backstop: a successful exit re-arms this to
+    // now+15s below, but if the watchdog force-stops the process and no
+    // `exited` arrives, this deadline still lets expirePending clear it.
+    _pendingHoldUntilMs = Date.now() + 195000
     lastError = ""
     _actionStartedMs = Date.now()
     actionProcess.exec(argv)
@@ -178,6 +222,7 @@ Item {
     bulkVmxPaths = paths
     bulkIndex = 0
     bulkErrors = []
+    bulkHolds = []
     lastError = ""
     runNextBulk()
   }
@@ -188,7 +233,6 @@ Item {
       bulkAction = ""
       bulkVmxPaths = []
       bulkIndex = 0
-      delayedRefresh.restart()
       return
     }
     var cmd = Model.bulkQueueCommand(bulkAction, bulkVmxPaths, bulkIndex)
@@ -202,8 +246,18 @@ Item {
   function finishBulkAction(code) {
     if (code !== 0) {
       bulkErrors.push(bulkVmxPaths[bulkIndex] + ": " + Model.formatActionError(_actionOut, _actionErr, code))
+    } else if (Model.bulkTargetState(bulkAction)) {
+      // The row still holds the pre-action "running" state until the re-poll
+      // below lands; without a hold it reads "running" in between, flashing
+      // "suspending" → "running" → "suspended" as the queue advances. Pause
+      // gets no hold — its target is not observable, so a hold could only
+      // end at the deadline.
+      bulkHolds = bulkHolds.concat([{ vmx: bulkVmxPaths[bulkIndex], action: bulkAction, untilMs: Date.now() + 15000 }])
     }
     bulkIndex += 1
+    // Re-poll after every item — not just the last — so each finished row
+    // settles to its real state promptly instead of waiting out the queue.
+    delayedRefresh.restart()
     runNextBulk()
   }
 
@@ -295,6 +349,7 @@ Item {
     onExited: function (code) {
       if (code !== 0) {
         root.expirePending()
+        root.settleBulkHolds()
         root.lastError = String(root._listErr || root._listOut || "vmrun list failed").replace(/^\s+|\s+$/g, "")
         return
       }

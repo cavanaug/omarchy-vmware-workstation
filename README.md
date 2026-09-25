@@ -60,7 +60,7 @@ Encrypted VMs need a password before `vmrun` can start or resume them. VMware's 
 What you are accepting by enabling it:
 
 - While `vmrun` runs, the password is visible in `ps` and `/proc/<pid>/cmdline` to **every local user account**. procfs command lines are world-readable by default on Linux (no `hidepid`).
-- The exposure is scoped: only start/resume of an encrypted VM injects the password, `vmrun` exits in seconds, and nothing is written to disk or logs by this plugin. Stop/suspend/reset of an already-running VM never use it.
+- The exposure is scoped: the password is injected only for VMs that have a saved keyring secret, `vmrun` exits in seconds, and nothing is written to disk or logs by this plugin. Note that *any* action on an encrypted VM — including stop/suspend of a running one — must decrypt the `.vmx`, so all of them go through `-vp` while the setting is on.
 - Your keyring is already accessible to any process running as your user; enabling this extends equivalent access to every account on the machine (and root) for the duration of the call.
 
 If the machine has other users, prefer one of these instead:

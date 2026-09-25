@@ -53,6 +53,18 @@ Panel {
     return vmware.pendingSlot !== 0 && Model.sameVmx(vmware.pendingVmx, vmx)
   }
 
+  // While any vmrun action is in flight the service refuses new work, so
+  // every action button greys out — not just the affected VM's row.
+  readonly property bool actionLocked: vmware.actionBusy
+
+  function rowSpinning(vmx) {
+    return root.vmBusy(vmx) || (vmware.bulkRunning && Model.sameVmx(vmware.bulkCurrentVmx, vmx))
+  }
+
+  function rowActionEnabled(vm, slot) {
+    return (Number(vm.slotsMask) & (1 << (slot - 1))) !== 0 && !root.actionLocked && !root.vmBusy(vm.vmx)
+  }
+
   function slotGlyph(slot) {
     if (slot === 1) return "󱐤"
     if (slot === 2) return "󰒲"
@@ -104,7 +116,12 @@ Panel {
         lines.push(String(v.name) + " " + String(v.state) + " mask=" + String(v.slotsMask))
       }
       if (vmware.lastError) lines.push(vmware.lastError)
-      return lines.join("\n") || "none"
+      lines.push("activity=" + (vmware.heroActivity || "idle")
+        + " pending=" + vmware.pendingSlot + (vmware.pendingVmx ? ":" + vmware.pendingVmx : "")
+        + " bulk=" + (vmware.bulkAction || "-")
+        + " cur=" + (vmware.bulkCurrentVmx || "-")
+        + " holds=" + vmware.bulkHolds.length)
+      return lines.join("\n")
     }
   }
 
@@ -180,36 +197,73 @@ Panel {
         width: panelFlick.width - (root.scrollable ? Style.space(16) : 0)
         spacing: Style.space(12)
 
-        PanelHero {
+        // Local hero instead of qs.Ui PanelHero: the shared component fixes
+        // the meta line's font (caption, bold, upright) with no italic hook.
+        // Title styling and geometry mirror PanelHero exactly (icon → 14
+        // gap → labels, trailing button, dim uppercase meta).
+        Item {
           id: hero
           width: parent.width
-          title: "VMware Workstation"
-          meta: "" + vmware.runningCount + " RUNNING"
-          foreground: root.foreground
-          fontFamily: root.fontFamily
-          iconComponent: Component {
-            Item {
-              width: Style.font.display
-              height: Style.font.display
-              Image {
-                anchors.fill: parent
-                source: root.brandedIcon
-                sourceSize.width: 48
-                sourceSize.height: 48
-                fillMode: Image.PreserveAspectFit
-                smooth: true
-              }
+          readonly property string metaText: vmware.heroActivity !== "" ? vmware.heroActivity : (vmware.runningCount + " RUNNING")
+          height: Math.max(heroIcon.height, heroLabels.implicitHeight, heroOpen.implicitHeight)
+
+          Image {
+            id: heroIcon
+            anchors.left: parent.left
+            anchors.verticalCenter: parent.verticalCenter
+            width: Style.font.display
+            height: width
+            source: root.brandedIcon
+            sourceSize.width: 48
+            sourceSize.height: 48
+            fillMode: Image.PreserveAspectFit
+            smooth: true
+          }
+
+          Column {
+            id: heroLabels
+            anchors.left: heroIcon.right
+            anchors.leftMargin: Style.space(14)
+            anchors.right: heroOpen.left
+            anchors.rightMargin: Style.space(12)
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: Style.space(2)
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: "VMware Workstation"
+              color: root.foreground
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.title
+              font.bold: true
+              elide: Text.ElideRight
+            }
+
+            Text {
+              width: parent.width
+              textFormat: Text.PlainText
+              text: hero.metaText.toUpperCase()
+              color: root.dim
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption - 1
+              font.bold: true
+              font.italic: true
+              font.letterSpacing: 1.2
+              elide: Text.ElideRight
             }
           }
-          trailingControl: Component {
-            Button {
-              iconText: "󰏌"
-              text: "Open"
-              tooltipText: "Open Workstation"
-              foreground: hero.foreground
-              fontFamily: hero.fontFamily
-              onClicked: root.openWorkstation()
-            }
+
+          Button {
+            id: heroOpen
+            anchors.right: parent.right
+            anchors.verticalCenter: parent.verticalCenter
+            iconText: "󰏌"
+            text: "Open"
+            tooltipText: "Open Workstation"
+            foreground: root.foreground
+            fontFamily: root.fontFamily
+            onClicked: root.openWorkstation()
           }
         }
 
@@ -287,6 +341,7 @@ Panel {
                     width: vmColumn.width
                     height: root.rowHeight
                     readonly property var vm: modelData
+                    readonly property bool spinning: root.rowSpinning(vm.vmx)
 
                     Row {
                       anchors.fill: parent
@@ -309,19 +364,33 @@ Panel {
 
                         Row {
                           spacing: Style.space(6)
-                          Rectangle {
-                            width: 7
-                            height: 7
-                            radius: 4
+                          Item {
+                            // Fixed-width slot so swapping bullet ↔ spinner
+                            // never reflows the status text.
+                            width: Style.font.icon
+                            height: Style.font.icon
                             anchors.verticalCenter: parent.verticalCenter
-                            color: (vm.state === "off" || vm.state === "missing") ? "transparent" : root.bulletColor(vm.state)
-                            border.width: (vm.state === "off" || vm.state === "missing") ? 1 : 0
-                            border.color: root.dim
+                            BusyDots {
+                              visible: spinning
+                              anchors.centerIn: parent
+                              fontSize: Style.font.icon
+                            }
+                            Rectangle {
+                              visible: !spinning
+                              width: 7
+                              height: 7
+                              radius: 4
+                              anchors.centerIn: parent
+                              color: (vm.state === "off" || vm.state === "missing") ? "transparent" : root.bulletColor(vm.state)
+                              border.width: (vm.state === "off" || vm.state === "missing") ? 1 : 0
+                              border.color: root.dim
+                            }
                           }
                           Text {
                             textFormat: Text.PlainText
-                            text: Model.statusLabel(vm.state, vmware.pendingSlot, vmware.pendingVmx, vm.vmx)
-                            color: root.dim
+                            text: Model.rowStatusLabel(vm.state, vmware.pendingSlot, vmware.pendingVmx, vm.vmx, vmware.bulkAction, vmware.bulkCurrentVmx, vmware.bulkHolds)
+                            color: spinning ? Color.accent : root.dim
+                            font.bold: spinning
                             font.family: root.fontFamily
                             font.pixelSize: Style.font.bodySmall
                           }
@@ -349,7 +418,7 @@ Panel {
                                 iconText: root.slotGlyph(slot)
                                 tooltipText: Model.guestWord(slot)
                                 iconOffsetX: slot === 5 ? -2 : 0
-                                enabled: (Number(vm.slotsMask) & (1 << (slot - 1))) !== 0 && !root.vmBusy(vm.vmx)
+                                enabled: root.rowActionEnabled(vm, slot)
                                 foreground: root.foreground
                                 fontFamily: root.fontFamily
                                 onClicked: vmware.runSlot(Number(slot), String(vm.vmx))
@@ -376,7 +445,7 @@ Panel {
                                 fontSize: Style.font.icon + 1
                                 iconText: root.slotGlyph(slot)
                                 tooltipText: Model.hardTooltip(slot)
-                                enabled: (Number(vm.slotsMask) & (1 << (slot - 1))) !== 0 && !root.vmBusy(vm.vmx)
+                                enabled: root.rowActionEnabled(vm, slot)
                                 foreground: root.foreground
                                 fontFamily: root.fontFamily
                                 onClicked: vmware.runSlot(Number(slot), String(vm.vmx))
@@ -394,9 +463,8 @@ Panel {
         }
 
         Item {
-          visible: vmware.runningCount > 0
           width: parent.width
-          height: visible ? root.iconBtnSize : 0
+          height: root.iconBtnSize
 
           Row {
             anchors.right: parent.right
@@ -420,7 +488,7 @@ Panel {
                 fontSize: Style.font.icon + 1
                 iconText: root.bulkGlyph(modelData)
                 tooltipText: root.bulkTooltip(modelData)
-                enabled: !vmware.busy && !vmware.bulkRunning
+                enabled: vmware.runningCount > 0 && !root.actionLocked
                 foreground: root.foreground
                 fontFamily: root.fontFamily
                 onClicked: vmware.runBulk(modelData)

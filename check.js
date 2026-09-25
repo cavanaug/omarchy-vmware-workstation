@@ -75,6 +75,38 @@ eq("status restarting", M.statusLabel("running", 6, "/a.vmx", "/a.vmx"), "restar
 eq("status guest startup from off", M.statusLabel("off", 7, "/a.vmx", "/a.vmx"), "starting")
 eq("status guest startup from suspended", M.statusLabel("suspended", 7, "/a.vmx", "/a.vmx"), "resuming")
 eq("status missing idle", M.statusLabel("missing", 0, "", "/gone.vmx"), "off")
+eq("pendingVerb unknown slot", M.pendingVerb(0, "running"), "")
+eq("hero idle", M.heroActivityText(0, "deb", "off", "", 0, 0), "")
+eq("hero starting names the vm", M.heroActivityText(7, "deb", "off", "", 0, 0), "starting deb")
+eq("hero resuming uses observed state", M.heroActivityText(3, "deb", "suspended", "", 0, 0), "resuming deb")
+eq("hero powering off", M.heroActivityText(1, "deb", "running", "", 0, 0), "powering off deb")
+eq("hero skips empty name", M.heroActivityText(2, "", "running", "", 0, 0), "")
+eq("hero bulk progress", M.heroActivityText(0, "", "", "shutdown", 1, 3), "shutting down 2/3")
+eq("hero bulk first item", M.heroActivityText(0, "", "", "suspend", 0, 2), "suspending 1/2")
+eq("hero bulk clamps at total", M.heroActivityText(0, "", "", "pause", 3, 3), "pausing 3/3")
+eq("hero bulk unknown action", M.heroActivityText(0, "", "", "explode", 0, 2), "")
+eq("rowStatusLabel shows bulk gerund on current vmx", M.rowStatusLabel("running", 0, "", "/a.vmx", "suspend", "/a.vmx"), "suspending")
+eq("rowStatusLabel leaves other rows on raw state", M.rowStatusLabel("running", 0, "", "/b.vmx", "suspend", "/a.vmx"), "running")
+eq("rowStatusLabel falls back to statusLabel", M.rowStatusLabel("suspended", 3, "/a.vmx", "/a.vmx", "", ""), "resuming")
+eq("rowStatusLabel unknown bulk action falls back", M.rowStatusLabel("off", 0, "", "/a.vmx", "explode", "/a.vmx"), "off")
+
+eq("bulkTargetState suspend is observable", M.bulkTargetState("suspend"), "suspended")
+eq("bulkTargetState shutdown is observable", M.bulkTargetState("shutdown"), "off")
+eq("bulkTargetState pause has no observable target", M.bulkTargetState("pause"), "")
+eq("bulkTargetState unknown action", M.bulkTargetState("explode"), "")
+var suspendHold = [{ vmx: "/a.vmx", action: "suspend", untilMs: 9e15 }]
+eq("finished bulk item keeps its gerund over the stale row",
+  M.rowStatusLabel("running", 0, "", "/a.vmx", "", "", suspendHold), "suspending")
+eq("hold releases once the poll shows the new state",
+  M.rowStatusLabel("suspended", 0, "", "/a.vmx", "", "", suspendHold), "suspended")
+eq("hold only masks its own row",
+  M.rowStatusLabel("running", 0, "", "/b.vmx", "", "", suspendHold), "running")
+eq("hold never masks a non-running row",
+  M.rowStatusLabel("off", 0, "", "/a.vmx", "", "", [{ vmx: "/a.vmx", action: "shutdown", untilMs: 9e15 }]), "off")
+eq("in-flight pending outranks a finished hold",
+  M.rowStatusLabel("running", 4, "/a.vmx", "/a.vmx", "", "", suspendHold), "shutting down")
+eq("rows without holds are unchanged",
+  M.rowStatusLabel("running", 0, "", "/a.vmx", "", "", []), "running")
 
 eq("hold resume until running", M.shouldHoldPending(3, "suspended"), true)
 eq("release resume once running", M.shouldHoldPending(3, "running"), false)
@@ -166,8 +198,13 @@ eq("formatActionError uses stderr",
   M.formatActionError("", "permission denied\n", 1),
   "permission denied")
 eq("formatActionError includes exit code",
-  M.formatActionError("", "", 255),
-  "vmrun failed (exit 255)")
+  M.formatActionError("", "", 255),  "vmrun failed (exit 255)")
+eq("formatActionError explains question auto-cancel",
+  M.formatActionError("Error: The operation was canceled\n", "", 255),
+  "Error: The operation was canceled — the VM is asking a question vmrun cannot answer (usually a host graphics or driver change since suspend). Resume the VM once in the Workstation GUI to accept it.")
+eq("formatActionError explains question auto-cancel from stderr",
+  M.formatActionError("", "Error: The operation was canceled", 255).indexOf("Workstation GUI") !== -1,
+  true)
 
 eq("shellQuote", M.shellQuote("a'b"), "'a'\\''b'")
 
@@ -205,9 +242,18 @@ eq("bulk actions are queued through the action process", service.indexOf("functi
 var listProcessSource = service.slice(service.indexOf("id: listProcess"), service.indexOf("id: vmssProcess"))
 var actionProcessSource = service.slice(service.indexOf("id: actionProcess"))
 eq("bulk queue advances only after each action exits", listProcessSource.indexOf("finishBulkAction") === -1 && actionProcessSource.indexOf("finishBulkAction") !== -1, true)
+var finishBulkSource = service.slice(service.indexOf("function finishBulkAction"), service.indexOf("function loadInventory"))
+eq("bulk items arm a label hold until re-polled",
+  finishBulkSource.indexOf("bulkHolds = bulkHolds.concat([") !== -1 && finishBulkSource.indexOf("Model.bulkTargetState") !== -1,
+  true)
+eq("every bulk exit re-polls so finished rows settle",
+  finishBulkSource.indexOf("delayedRefresh.restart()") !== -1, true)
+eq("holds settle with polls and expire on deadline",
+  service.indexOf("function settleBulkHolds") !== -1 && service.indexOf("settleBulkHolds()") !== -1 && service.indexOf("bulkHolds = []") !== -1, true)
 
 var panel = fs.readFileSync("./Panel.qml", "utf8")
-eq("row status uses statusLabel", panel.indexOf("Model.statusLabel") !== -1, true)
+eq("row status uses rowStatusLabel", panel.indexOf("Model.rowStatusLabel") !== -1, true)
+eq("row status consumes bulk holds", panel.indexOf("vmware.bulkHolds") !== -1, true)
 eq("hard actions use tooltips", panel.indexOf("Model.hardTooltip") !== -1, true)
 eq("guest actions use guest words as tooltips", panel.indexOf("Model.guestWord") !== -1, true)
 eq("two-line headers with hard/soft subtitles", panel.indexOf('"GuestOS\\n(soft)"') !== -1 && panel.indexOf('"Hypervisor\\n(hard)"') !== -1, true)
@@ -227,9 +273,20 @@ eq("glyphs are 1px over the icon token", (panel.match(/fontSize: Style\.font\.ic
 eq("guest column first, hypervisor second", panel.indexOf('"GuestOS\\n(soft)"') < panel.indexOf('"Hypervisor\\n(hard)"') && panel.indexOf("model: [4, 5, 7, 6]") !== -1 && panel.indexOf("model: [4, 5, 7, 6]") < panel.indexOf("slot: index + 1"), true)
 eq("guest order is shutdown sleep startup restart", panel.indexOf("model: [4, 5, 7, 6]") !== -1, true)
 eq("footer bulk controls are shutdown suspend pause", panel.indexOf('model: ["shutdown", "suspend", "pause"]') !== -1, true)
-eq("pending vm disables its buttons", (panel.match(/enabled: \(Number\(vm\.slotsMask\) & \(1 << \(slot - 1\)\)\) !== 0 && !root\.vmBusy\(vm\.vmx\)/g) || []).length, 2)
+eq("footer bulk row always visible, buttons gated on running VMs", panel.indexOf("visible: vmware.runningCount > 0") === -1 && panel.indexOf("enabled: vmware.runningCount > 0 && !root.actionLocked") !== -1, true)
+eq("all action buttons share the rowActionEnabled gate", (panel.match(/enabled: root\.rowActionEnabled\(vm, slot\)/g) || []).length === 2 && panel.indexOf("function rowActionEnabled") !== -1 && panel.indexOf("!root.actionLocked && !root.vmBusy(vm.vmx)") !== -1, true)
+eq("action lock keys on the action process, not polls", service.indexOf("actionBusy") !== -1 && service.indexOf("busy: whichProcess.running") !== -1 && panel.indexOf("actionLocked") !== -1, true)
 eq("vmBusy gates on pendingSlot and sameVmx", panel.indexOf("function vmBusy") !== -1 && panel.indexOf("Model.sameVmx(vmware.pendingVmx, vmx)") !== -1, true)
 eq("header columns size to labels and buttons", panel.indexOf("hyperColWidth") !== -1 && panel.indexOf("guestColWidth") !== -1, true)
+eq("service exposes heroActivity and bulkCurrentVmx", service.indexOf("heroActivity") !== -1 && service.indexOf("bulkCurrentVmx") !== -1, true)
+eq("hero meta swaps to activity text with running-count fallback", panel.indexOf('vmware.heroActivity !== ""') !== -1, true)
+eq("activity indicator is the row-only BusyDots braille spinner", (panel.match(/BusyDots \{/g) || []).length === 1, true)
+var busy = fs.readFileSync("./BusyDots.qml", "utf8")
+eq("BusyDots cycles the ten-frame lazygit braille spinner", busy.indexOf('["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]') !== -1 && busy.indexOf("Timer") !== -1 && busy.indexOf("Text.PlainText") !== -1, true)
+eq("rows spin for pending or bulk-current vmx", panel.indexOf("function rowSpinning") !== -1 && panel.indexOf("vmware.bulkCurrentVmx") !== -1, true)
+eq("active row pops with accent and bold", busy.indexOf("dotColor: Color.accent") !== -1 && panel.indexOf("? Color.accent : root.dim") !== -1 && panel.indexOf("font.bold: spinning") !== -1, true)
+eq("status ipc reports activity state", panel.indexOf('"activity="') !== -1, true)
+eq("status ipc reports hold count", panel.indexOf('" holds="') !== -1, true)
 
 var PLUGIN_ID = "io.github.cavanaug.vmware-workstation"
 var manifest = JSON.parse(fs.readFileSync("./manifest.json", "utf8"))

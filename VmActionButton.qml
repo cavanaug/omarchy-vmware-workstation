@@ -3,11 +3,10 @@ import qs.Commons
 import qs.Ui
 
 // Small (22×22 by default) icon button used at the right edge of panel rows
-// for inline actions — forget network, confirm passphrase, unpair device,
-// etc. Two visual modes are supported via `hoverColor`:
+// for inline per-VM actions. Two visual modes are supported via `hoverColor`:
 //   - default: hoverColor === foreground → subtle foreground-tint hover
 //   - urgent:  hoverColor === bar.urgent → red-tint hover for destructive
-//              actions like forget/unpair
+//              actions like power-off
 //
 // `enabled` gates clicks and dims the icon. The component owns its own
 // hover state visuals; mouse hover does NOT update any panel cursor state
